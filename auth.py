@@ -27,7 +27,6 @@ from google_auth_oauthlib.flow import Flow
 SCOPES = ["https://www.googleapis.com/auth/tasks"]
 
 _SESSION_KEY = "google_credentials"
-_VERIFIER_KEY = "google_oauth_code_verifier"
 
 
 def _client_config() -> dict:
@@ -45,11 +44,15 @@ def _client_config() -> dict:
 
 
 def _build_flow() -> Flow:
+    # PKCE is disabled: st.session_state does NOT survive the redirect out to Google
+    # and back (that returns in a fresh session), so a per-session code_verifier can't
+    # be preserved. This is a confidential "Web application" client with a client_secret,
+    # for which PKCE is optional — the secret secures the token exchange.
     return Flow.from_client_config(
         _client_config(),
         scopes=SCOPES,
         redirect_uri=st.secrets["google_oauth"]["redirect_uri"],
-        autogenerate_code_verifier=True,
+        autogenerate_code_verifier=False,
     )
 
 
@@ -99,19 +102,13 @@ def get_credentials():
     # Step 2: we came back from Google with an authorization code.
     code = st.query_params.get("code")
     if code:
-        # Restore the PKCE code_verifier generated when we built the sign-in URL;
-        # it must match the code_challenge Google received, or the token exchange
-        # fails with "Missing code verifier".
-        flow.code_verifier = st.session_state.get(_VERIFIER_KEY)
         try:
             flow.fetch_token(code=code)
         except Exception as e:
             st.error(f"Sign-in failed: {e}")
             st.query_params.clear()
-            st.session_state.pop(_VERIFIER_KEY, None)
             st.stop()
         st.session_state[_SESSION_KEY] = flow.credentials.to_json()
-        st.session_state.pop(_VERIFIER_KEY, None)
         st.query_params.clear()
         st.rerun()
 
@@ -120,8 +117,6 @@ def get_credentials():
         access_type="offline",
         prompt="consent",
     )
-    # Persist the verifier so it survives the redirect back into a fresh rerun.
-    st.session_state[_VERIFIER_KEY] = flow.code_verifier
     st.title("📋 Google Tasks Dashboard")
     st.write("Sign in with your Google account to view and manage your tasks.")
     st.link_button("🔐 Sign in with Google", auth_url, type="primary")
