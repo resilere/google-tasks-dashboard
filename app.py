@@ -10,7 +10,9 @@ import pandas as pd
 from datetime import datetime
 
 from auth import get_credentials, logout
-from tasks_api import get_service, fetch_tasks, add_task, update_task, delete_task
+from tasks_api import (
+    get_service, fetch_tasks, add_task, update_task, delete_task, list_tasklists,
+)
 from transform import transform
 from analytics import (
     chart_weekly_goal_ring,
@@ -36,7 +38,7 @@ service = get_service(creds)
 
 st.title("📋 Google Tasks Manager")
 
-tasklists = service.tasklists().list().execute().get("items", [])
+tasklists = list_tasklists(service)
 if not tasklists:
     st.error("No task lists found in your Google account.")
     st.stop()

@@ -12,16 +12,46 @@ def get_service(creds):
 
 
 # --------------------------
+# Pagination helpers
+# --------------------------
+def list_tasklists(service):
+    """Return every task list, following pagination (default page size is small)."""
+    items = []
+    page_token = None
+    while True:
+        resp = service.tasklists().list(maxResults=100, pageToken=page_token).execute()
+        items.extend(resp.get("items", []))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            return items
+
+
+def _list_all_tasks(service, tasklist_id):
+    """Return every task in a list, following pagination (API caps each page at 100)."""
+    items = []
+    page_token = None
+    while True:
+        resp = service.tasks().list(
+            tasklist=tasklist_id,
+            showHidden=True,
+            maxResults=100,
+            pageToken=page_token,
+        ).execute()
+        items.extend(resp.get("items", []))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            return items
+
+
+# --------------------------
 # Fetch tasks
 # --------------------------
 def fetch_tasks(service):
     all_tasks = []
-    tasklists = service.tasklists().list().execute()
-    for tl in tasklists.get("items", []):
+    for tl in list_tasklists(service):
         tl_id = tl["id"]
         tl_title = tl.get("title", "")
-        tasks = service.tasks().list(tasklist=tl_id, showHidden=True).execute()
-        for t in tasks.get("items", []):
+        for t in _list_all_tasks(service, tl_id):
             all_tasks.append({
                 "id": t.get("id"),
                 "title": t.get("title"),
