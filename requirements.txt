@@ -1,6 +1,6 @@
-streamlit
-pandas
-plotly
-google-api-python-client
-google-auth
-google-auth-oauthlib
+streamlit>=1.42,<2
+pandas>=2.2,<3
+plotly>=5.24,<6
+google-api-python-client>=2.150,<3
+google-auth>=2.35,<3
+google-auth-oauthlib>=1.2,<2

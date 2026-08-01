@@ -12,10 +12,29 @@ def transform(df: pd.DataFrame) -> pd.DataFrame:
     Expected input: DataFrame with columns from tasks_api.fetch_tasks()
     Gracefully handles missing optional fields.
     Converts all datetimes to tz-naive UTC for consistency.
+    Returns a frame that always carries the derived columns (even when empty), so
+    downstream analytics never KeyError on an empty task list.
     """
+    # (column name -> dtype) for every column analytics expects to exist.
+    derived_dtypes = {
+        "age_days": "float64", "days_overdue": "float64", "completion_lag": "float64",
+        "comp_hour": "float64", "comp_dow": "float64",
+        "is_subtask": "bool", "has_due": "bool",
+        "category": "object", "comp_week": "object", "comp_month": "object",
+        "comp_date": "datetime64[ns]",
+    }
     if df.empty:
-        return df
-    
+        out = df.copy()
+        for col in ["updated", "due", "completed"]:
+            if col not in out.columns:
+                out[col] = pd.Series(dtype="datetime64[ns]")
+        if "status" not in out.columns:
+            out["status"] = pd.Series(dtype="object")
+        for col, dtype in derived_dtypes.items():
+            if col not in out.columns:
+                out[col] = pd.Series(dtype=dtype)
+        return out
+
     df = df.copy()
     
     # Helper to convert any datetime to tz-naive

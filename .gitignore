@@ -1,3 +1,14 @@
-task_analysis.py
+# Secrets & credentials — never commit
 client_secret.json
 token.pkl
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Local task exports / scratch (personal data)
+detailed_analysis/*.csv
+*.csv
+task_analysis.py
