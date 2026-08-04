@@ -1,8 +1,10 @@
 # Google Tasks Dashboard
 
 A Streamlit app to manage **and** analyze your [Google Tasks](https://tasks.google.com):
-a Manage tab for CRUD (add / edit / delete across your task lists) and an Analytics tab
-with completion velocity, streaks, backlog health, and day/time patterns.
+a Manage tab for CRUD (add / edit / delete across your task lists), a Focus tab that
+picks random open tasks across all lists (weighted toward the ones open longest) to fight
+decision paralysis, and an Analytics tab with completion velocity, streaks, backlog health,
+and day/time patterns.
 
 Auth is **per-user**: everyone signs in with their own Google account, and credentials +
 task data live only in that person's browser session. So the app is private for you today

@@ -5,8 +5,11 @@ Google Tasks Manager with an integrated analytics dashboard.
 Auth is per-user (see auth.py): every visitor signs in with their own Google
 account and their credentials + task data stay in their own session.
 """
+import random
+
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import datetime
 
 from auth import get_credentials, logout
@@ -68,40 +71,72 @@ def _to_tz_naive(s):
         return pd.NaT
 
 
-def load_tasks(force: bool = False):
+def _build_df(tasks):
+    """Turn raw task dicts from fetch_tasks() into a normalized DataFrame."""
+    if not tasks:
+        return pd.DataFrame(
+            columns=["id", "title", "notes", "due", "status", "completed",
+                     "updated", "list_title", "list_id", "parent"]
+        )
+    df = pd.DataFrame(tasks)
+    required_cols = ["id", "title", "notes", "due", "status", "completed",
+                     "updated", "list_title", "list_id", "parent"]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = pd.NaT if col in ("due", "completed", "updated") else None
+    df["due"] = df["due"].apply(_to_tz_naive)
+    df["completed"] = df["completed"].apply(_to_tz_naive)
+    df["updated"] = df["updated"].apply(_to_tz_naive)
+    return df
+
+
+def load_all_tasks(force: bool = False):
     """
-    Load tasks for the selected list, cached per-session in st.session_state.
+    Load tasks across ALL lists, cached per-session in st.session_state.
 
     NOTE: we deliberately cache in session_state (per browser session) rather than
     st.cache_data (shared across ALL users) so one visitor's tasks never leak into
     another visitor's view when the app is public.
     """
     cache = st.session_state.setdefault("_tasks_cache", {})
-    if not force and tasklist_id in cache:
-        return cache[tasklist_id]
-
-    tasks = [t for t in fetch_tasks(service) if t["list_id"] == tasklist_id]
-
-    if not tasks:
-        df = pd.DataFrame(
-            columns=["id", "title", "notes", "due", "status", "completed", "updated", "list_title"]
-        )
-    else:
-        df = pd.DataFrame(tasks)
-        required_cols = ["id", "title", "notes", "due", "status", "completed", "updated", "list_title", "parent"]
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = pd.NaT if col in ("due", "completed", "updated") else None
-        df["due"] = df["due"].apply(_to_tz_naive)
-        df["completed"] = df["completed"].apply(_to_tz_naive)
-        df["updated"] = df["updated"].apply(_to_tz_naive)
-
-    cache[tasklist_id] = df
+    if not force and "__all__" in cache:
+        return cache["__all__"]
+    df = _build_df(fetch_tasks(service))
+    cache["__all__"] = df
     return df
+
+
+def load_tasks(force: bool = False):
+    """Tasks for the currently selected list (derived from the all-lists load)."""
+    all_df = load_all_tasks(force)
+    if all_df.empty:
+        return all_df
+    return all_df[all_df["list_id"] == tasklist_id].copy()
 
 
 def clear_tasks_cache():
     st.session_state.pop("_tasks_cache", None)
+
+
+def pick_focus_tasks(open_df, n, favor_long_open, seed):
+    """
+    Weighted-random selection of open tasks. When favor_long_open is True, a task's
+    probability is proportional to how long it has been open (age_days), so tasks
+    that have lingered the longest surface more often. Returns them sorted by
+    days-open (longest first).
+    """
+    idx = open_df.index.to_numpy()
+    n = min(int(n), len(idx))
+    if n == 0:
+        return open_df.iloc[0:0]
+    rng = np.random.default_rng(seed)
+    if favor_long_open:
+        weights = open_df["age_days"].fillna(0).clip(lower=0).to_numpy(dtype=float) + 1.0
+        probs = weights / weights.sum()
+        chosen = rng.choice(idx, size=n, replace=False, p=probs)
+    else:
+        chosen = rng.choice(idx, size=n, replace=False)
+    return open_df.loc[chosen].sort_values("age_days", ascending=False)
 
 
 # Load data
@@ -118,9 +153,11 @@ if st.sidebar.button("Sign out"):
     st.rerun()
 
 # --------------------------
-# TABS: Manage vs Analytics
+# TABS: Manage vs Focus vs Analytics
 # --------------------------
-tab_manage, tab_analytics = st.tabs(["📝 Manage Tasks", "📊 Analytics"])
+tab_manage, tab_focus, tab_analytics = st.tabs(
+    ["📝 Manage Tasks", "🎯 Focus", "📊 Analytics"]
+)
 
 # ═══════════════════════════════════════════════════════════
 # TAB 1: MANAGE (CRUD workflow)
@@ -235,7 +272,75 @@ with tab_manage:
             st.rerun()
 
 # ═══════════════════════════════════════════════════════════
-# TAB 2: ANALYTICS
+# TAB 2: FOCUS (weighted-random picker across ALL lists)
+# ═══════════════════════════════════════════════════════════
+with tab_focus:
+    st.subheader("🎯 Focus — what should I tackle now?")
+    st.caption(
+        "A weighted-random pick from your open tasks across **all** lists, biased "
+        "toward the ones that have stayed open the longest."
+    )
+
+    focus_df = transform(load_all_tasks())
+    open_all = (
+        focus_df[focus_df["status"] == "needsAction"].copy()
+        if not focus_df.empty else focus_df
+    )
+
+    ctrl1, ctrl2, ctrl3 = st.columns([1, 1, 1])
+    with ctrl1:
+        n_picks = st.number_input("How many tasks", min_value=1, max_value=10, value=3, key="focus_n")
+    with ctrl2:
+        favor_long = st.toggle("Favor long-open tasks", value=True, key="focus_favor")
+    with ctrl3:
+        st.write("")  # vertical alignment
+        if st.button("🎲 Randomize", key="focus_shuffle", use_container_width=True):
+            st.session_state["focus_seed"] = random.randrange(2**32)
+            st.rerun()
+
+    seed = st.session_state.setdefault("focus_seed", random.randrange(2**32))
+
+    if open_all.empty:
+        st.success("🎉 No open tasks anywhere — you're at inbox zero!")
+    else:
+        st.caption(f"Choosing from {len(open_all)} open tasks across all lists.")
+        picks = pick_focus_tasks(open_all, n_picks, favor_long, seed)
+
+        for _, row in picks.iterrows():
+            with st.container(border=True):
+                left, right = st.columns([4, 1])
+                with left:
+                    st.markdown(f"### {row['title'] or '(untitled)'}")
+                    st.caption(f"📂 {row['list_title'] or 'Unknown list'}")
+                    due = row.get("due")
+                    overdue = row.get("days_overdue")
+                    if pd.notna(due):
+                        if pd.notna(overdue) and overdue > 0:
+                            st.markdown(f":red[⚠️ {int(overdue)} days overdue] · due {due.date()}")
+                        else:
+                            st.markdown(f"📅 Due {due.date()}")
+                    notes = row.get("notes")
+                    if notes:
+                        st.caption(str(notes)[:200])
+                with right:
+                    age = row.get("age_days")
+                    st.metric("Days open", int(age) if pd.notna(age) else "—")
+                    if st.button("✓ Done", key=f"focus_done_{row['id']}", use_container_width=True):
+                        try:
+                            update_task(service, row["list_id"], row["id"], status="completed")
+                            clear_tasks_cache()
+                            st.toast("Marked done ✓")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to complete: {e}")
+
+        st.caption(
+            "“Days open” = days since the task was last modified (Google Tasks has no "
+            "creation timestamp)."
+        )
+
+# ═══════════════════════════════════════════════════════════
+# TAB 3: ANALYTICS
 # ═══════════════════════════════════════════════════════════
 with tab_analytics:
 
