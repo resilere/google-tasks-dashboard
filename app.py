@@ -46,10 +46,12 @@ if not tasklists:
     st.error("No task lists found in your Google account.")
     st.stop()
 
-tasklist_id = st.selectbox(
-    "Select Task List",
+st.sidebar.subheader("📋 Task list")
+tasklist_id = st.sidebar.selectbox(
+    "Task list",
     [tl["id"] for tl in tasklists],
-    format_func=lambda x: next(tl["title"] for tl in tasklists if tl["id"] == x)
+    format_func=lambda x: next(tl["title"] for tl in tasklists if tl["id"] == x),
+    label_visibility="collapsed",
 )
 
 # --------------------------
@@ -144,10 +146,33 @@ raw_df = load_tasks()
 df = transform(raw_df)
 
 # --------------------------
-# Sidebar: account
+# Sidebar: at-a-glance pulse (across ALL lists)
 # --------------------------
-st.sidebar.subheader("Account")
-if st.sidebar.button("Sign out"):
+_all = transform(load_all_tasks())
+if _all.empty:
+    _open_ct = _overdue_ct = _done_week = 0
+else:
+    _monday = pd.Timestamp.now().normalize() - pd.Timedelta(days=int(pd.Timestamp.now().weekday()))
+    _open_mask = _all["status"] == "needsAction"
+    _open_ct = int(_open_mask.sum())
+    _overdue_ct = int((_open_mask & (_all["days_overdue"] > 0)).sum())
+    _done_week = int((_all["completed"] >= _monday).sum())
+
+st.sidebar.subheader("At a glance")
+_g1, _g2, _g3 = st.sidebar.columns(3)
+_g1.metric("Open", _open_ct)
+_g2.metric("Overdue", _overdue_ct)
+_g3.metric("Done wk", _done_week)
+st.sidebar.caption("Across all lists")
+
+# --------------------------
+# Sidebar: refresh + account
+# --------------------------
+st.sidebar.divider()
+if st.sidebar.button("🔄 Refresh Tasks", use_container_width=True):
+    clear_tasks_cache()
+    st.rerun()
+if st.sidebar.button("Sign out", use_container_width=True):
     logout()
     clear_tasks_cache()
     st.rerun()
@@ -163,11 +188,6 @@ tab_manage, tab_focus, tab_analytics = st.tabs(
 # TAB 1: MANAGE (CRUD workflow)
 # ═══════════════════════════════════════════════════════════
 with tab_manage:
-
-    # Sidebar: Refresh button
-    if st.sidebar.button("Refresh Tasks"):
-        clear_tasks_cache()
-        st.rerun()
 
     # Sidebar: which tasks to show (open by default — completed are hidden)
     st.sidebar.subheader("Show")
@@ -246,49 +266,6 @@ with tab_manage:
                 st.rerun()
             else:
                 st.info("No changes to save.")
-
-    # ----- Sidebar: select a task to edit -----
-    st.sidebar.subheader("Edit Specific Task")
-    if not df_display.empty:
-        task_options = list(df_display["id"])
-        selected_task_id = st.sidebar.selectbox(
-            "Select task to edit",
-            options=task_options,
-            format_func=lambda x: df_display[df_display["id"] == x]["title"].values[0]
-        )
-
-        # Show editable fields for this specific task
-        task_row = df_display[df_display["id"] == selected_task_id].iloc[0]
-
-        new_title = st.sidebar.text_input("Title", value=task_row["title"])
-        new_notes = st.sidebar.text_area("Notes", value=task_row.get("notes") or "")
-        new_due = st.sidebar.date_input(
-            "Due Date (optional)",
-            value=task_row["due"].date() if pd.notna(task_row["due"]) else None
-        )
-        new_status = st.sidebar.selectbox(
-            "Status",
-            options=["needsAction", "completed"],
-            index=0 if task_row["status"] == "needsAction" else 1
-        )
-
-        if st.sidebar.button("Update Selected Task"):
-            due_iso = to_due_iso(new_due) if new_due else None
-            try:
-                update_task(
-                    service,
-                    tasklist_id,
-                    selected_task_id,
-                    title=new_title,
-                    notes=new_notes,
-                    due=due_iso,
-                    status=new_status
-                )
-                st.success("Task updated!")
-                clear_tasks_cache()
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to update task: {e}")
 
     # ----- Add new task -----
     st.subheader("Add New Task")
