@@ -169,21 +169,83 @@ with tab_manage:
         clear_tasks_cache()
         st.rerun()
 
-    # Sidebar: Filter by Status
-    st.sidebar.subheader("Filter by Status")
-    status_options = ["completed", "needsAction"]
-    selected_status = st.sidebar.multiselect("Status", status_options, default=status_options)
-    df_filtered = df[df["status"].isin(selected_status)].copy()
+    # Sidebar: which tasks to show (open by default — completed are hidden)
+    st.sidebar.subheader("Show")
+    view_choice = st.sidebar.radio(
+        "Tasks to show", ["Open", "Completed", "All"], index=0, key="status_view"
+    )
+    if view_choice == "Open":
+        df_filtered = df[df["status"] == "needsAction"].copy()
+    elif view_choice == "Completed":
+        df_filtered = df[df["status"] == "completed"].copy()
+    else:
+        df_filtered = df.copy()
 
-    # ----- Editable table -----
-    st.subheader("Tasks")
+    # Kept for the sidebar single-task editor and the delete section below.
     df_display = df_filtered[["id", "title", "notes", "due", "status"]].copy()
 
-    edited_df = st.data_editor(
-        df_display,
-        num_rows="dynamic",
-        use_container_width=True,
-    )
+    # ----- Editable table (checkbox = done; inline edits save via the button) -----
+    st.subheader("Tasks")
+    if df_filtered.empty:
+        st.info("No tasks to show. Try a different filter, or add one below.")
+    else:
+        editor_view = df_filtered.set_index("id")[["status", "title", "notes", "due"]].copy()
+        editor_view.insert(0, "done", editor_view["status"] == "completed")
+        editor_view = editor_view.drop(columns=["status"])
+
+        edited = st.data_editor(
+            editor_view,
+            column_config={
+                "done": st.column_config.CheckboxColumn("Done", width="small"),
+                "title": st.column_config.TextColumn("Task", width="large", required=True),
+                "notes": st.column_config.TextColumn("Notes", width="medium"),
+                "due": st.column_config.DateColumn("Due", format="YYYY-MM-DD", width="small"),
+            },
+            use_container_width=True,
+            num_rows="fixed",
+            hide_index=True,
+            key="task_editor",
+        )
+
+        if st.button("💾 Save changes", type="primary"):
+            def _as_date(v):
+                return None if v is None or pd.isna(v) else pd.Timestamp(v).date()
+
+            changed = 0
+            for tid in edited.index:
+                new, old = edited.loc[tid], editor_view.loc[tid]
+                updates = {}
+
+                new_title = (new["title"] or "").strip()
+                if new_title and new_title != (old["title"] or ""):
+                    updates["title"] = new_title
+
+                new_notes = "" if new["notes"] is None else str(new["notes"])
+                old_notes = "" if old["notes"] is None else str(old["notes"])
+                if new_notes != old_notes:
+                    updates["notes"] = new_notes
+
+                new_due, old_due = _as_date(new["due"]), _as_date(old["due"])
+                if new_due != old_due and new_due is not None:
+                    updates["due"] = to_due_iso(new_due)
+
+                new_status = "completed" if bool(new["done"]) else "needsAction"
+                if new_status != ("completed" if bool(old["done"]) else "needsAction"):
+                    updates["status"] = new_status
+
+                if updates:
+                    try:
+                        update_task(service, tasklist_id, tid, **updates)
+                        changed += 1
+                    except Exception as e:
+                        st.error(f"Failed to update “{old['title']}”: {e}")
+
+            if changed:
+                st.success(f"Saved {changed} change(s).")
+                clear_tasks_cache()
+                st.rerun()
+            else:
+                st.info("No changes to save.")
 
     # ----- Sidebar: select a task to edit -----
     st.sidebar.subheader("Edit Specific Task")
